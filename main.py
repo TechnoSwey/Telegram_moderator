@@ -116,41 +116,82 @@ async def list_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         level_users = {level: [] for level in range(6, 0, -1)}
         
         all_users = db.get_all_users()
-        user_ids_in_chat = set()
         
-        async for member in context.bot.get_chat_members(chat_id):
-            user_ids_in_chat.add(member.user.id)
-            db.set_user_level(
-                member.user.id,
-                db.get_user_level(member.user.id),
-                member.user.username,
-                member.user.first_name
-            )
+        # Пробуем получить участников чата
+        try:
+            user_ids_in_chat = set()
+            
+            # Пробуем получить участников, но ограничим количество
+            count = 0
+            async for member in context.bot.get_chat_members(chat_id):
+                if count > 200:  # Ограничим количество для больших чатов
+                    break
+                
+                user_ids_in_chat.add(member.user.id)
+                db.set_user_level(
+                    member.user.id,
+                    db.get_user_level(member.user.id),
+                    member.user.username,
+                    member.user.first_name
+                )
+                count += 1
+            
+            # Формируем список по уровням из пользователей в чате
+            for user_data in all_users:
+                if user_data['user_id'] in user_ids_in_chat:
+                    level = user_data['level']
+                    username = f"@{user_data['username']}" if user_data['username'] else user_data['first_name'] or f"ID: {user_data['user_id']}"
+                    level_users[level].append(username)
         
-        for user_data in all_users:
-            if user_data['user_id'] in user_ids_in_chat:
+        except Exception as e:
+            # Если не удалось получить участников, показываем всех пользователей из базы
+            for user_data in all_users:
                 level = user_data['level']
                 username = f"@{user_data['username']}" if user_data['username'] else user_data['first_name'] or f"ID: {user_data['user_id']}"
                 level_users[level].append(username)
         
+        # Формируем сообщение
         message_lines = ["📋 Пользователи по уровням:\n"]
         
+        has_users = False
         for level in range(6, 0, -1):
             users_list = level_users[level]
             if users_list:
-                users = ", ".join(users_list[:15])
-                if len(users_list) > 15:
-                    users += f" и еще {len(users_list) - 15}"
+                has_users = True
+                users = ", ".join(users_list[:10])  # Ограничим показ до 10 пользователей на уровень
+                if len(users_list) > 10:
+                    users += f" и еще {len(users_list) - 10}"
                 
                 message_lines.append(f"\n{LEVELS[level]} ({len(users_list)}):\n{users}")
         
-        if len(message_lines) == 1:
+        if not has_users:
             await update.message.reply_text("📭 В чате пока нет пользователей с уровнями")
+            return
+        
+        message = "".join(message_lines)
+        
+        # Разбиваем сообщение если слишком длинное
+        if len(message) > 4000:
+            parts = []
+            current_part = ""
+            for line in message_lines:
+                if len(current_part + line) > 4000:
+                    parts.append(current_part)
+                    current_part = line
+                else:
+                    current_part += line
+            
+            if current_part:
+                parts.append(current_part)
+            
+            for part in parts:
+                await update.message.reply_text(part)
         else:
-            await update.message.reply_text("".join(message_lines))
+            await update.message.reply_text(message)
             
     except Exception as e:
-        await update.message.reply_text("❌ Ошибка получения списка")
+        print(f"Ошибка в /list: {e}")
+        await update.message.reply_text("❌ Ошибка получения списка. Проверьте права бота.")
 
 async def setlevel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
