@@ -257,7 +257,7 @@ async def unmute(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.restrict_chat_member(
             chat_id=chat_id,
             user_id=target_id,
-            permissions=ChatPermissions(can_send_messages=True)
+            permissions=UNMUTE_PERMISSIONS
         )
         
         await update.message.reply_text(f"✅ Пользователь {target_username} размьючен!")
@@ -321,7 +321,7 @@ async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.restrict_chat_member(
             chat_id=chat_id,
             user_id=target_id,
-            permissions=ChatPermissions(can_send_messages=False),
+            permissions=FULL_MUTE_PERMISSIONS,
             until_date=mute_until
         )
         
@@ -575,7 +575,7 @@ async def report_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.restrict_chat_member(
                     chat_id=chat_id,
                     user_id=reported_user_id,
-                    permissions=ChatPermissions(can_send_messages=False),
+                    permissions=FULL_MUTE_PERMISSIONS,
                     until_date=mute_until
                 )
                 
@@ -783,16 +783,19 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE,
     if user_level < 3 and user_id not in SENIOR_ADMIN_IDS:
         is_spam = is_emoji_only(message_text)
         
-        db.add_message_record(user_id, is_spam)
-        
         if is_spam:
+            db.add_message_record(user_id, True)
+            
             recent_messages = db.get_recent_spam_messages(user_id, SPAM_THRESHOLD)
             
-            if len(recent_messages) >= SPAM_THRESHOLD and all(recent_messages):
-                if can_mute_user(context.bot.id, user_id):
-                    await mute_user(update, context, user_id, "спам эмодзи")
-                    await update.message.delete()
-                    db.clear_user_history(user_id)
+            if len(recent_messages) >= SPAM_THRESHOLD:
+                if all(recent_messages):
+                    if can_mute_user(context.bot.id, user_id):
+                        await mute_user(update, context, user_id, "спам эмодзи")
+                        await update.message.delete()
+                        db.clear_user_history(user_id)
+        else:
+            db.add_message_record(user_id, False)
 
 async def mute_user(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                    user_id: int, reason: str):
@@ -803,7 +806,7 @@ async def mute_user(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await context.bot.restrict_chat_member(
             chat_id=chat_id,
             user_id=user_id,
-            permissions=ChatPermissions(can_send_messages=False),
+            permissions=FULL_MUTE_PERMISSIONS,
             until_date=mute_until
         )
         
@@ -821,7 +824,8 @@ async def mute_user(update: Update, context: ContextTypes.DEFAULT_TYPE,
         db.clear_user_history(user_id)
         
     except Exception as e:
-        pass
+        if DEBUG:
+            print(f"Ошибка при муте: {e}")
 
 def main():
     print("="*50)
