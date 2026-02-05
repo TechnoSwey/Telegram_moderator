@@ -26,12 +26,36 @@ class Database:
         ''')
         
         cursor.execute('''
+            CREATE TABLE IF NOT EXISTS chats (
+                chat_id INTEGER PRIMARY KEY,
+                title TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS chat_users (
+                chat_id INTEGER,
+                user_id INTEGER,
+                username TEXT,
+                first_name TEXT,
+                last_name TEXT,
+                last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (chat_id, user_id),
+                FOREIGN KEY (chat_id) REFERENCES chats (chat_id),
+                FOREIGN KEY (user_id) REFERENCES users (user_id)
+            )
+        ''')
+        
+        cursor.execute('''
             CREATE TABLE IF NOT EXISTS message_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
+                chat_id INTEGER,
                 is_spam BOOLEAN,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users (user_id)
+                FOREIGN KEY (user_id) REFERENCES users (user_id),
+                FOREIGN KEY (chat_id) REFERENCES chats (chat_id)
             )
         ''')
         
@@ -39,8 +63,10 @@ class Database:
             CREATE TABLE IF NOT EXISTS sticker_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
+                chat_id INTEGER,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users (user_id)
+                FOREIGN KEY (user_id) REFERENCES users (user_id),
+                FOREIGN KEY (chat_id) REFERENCES chats (chat_id)
             )
         ''')
         
@@ -48,11 +74,13 @@ class Database:
             CREATE TABLE IF NOT EXISTS mutes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
+                chat_id INTEGER,
                 reason TEXT,
                 muted_by INTEGER,
                 muted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 mute_until TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users (user_id),
+                FOREIGN KEY (chat_id) REFERENCES chats (chat_id),
                 FOREIGN KEY (muted_by) REFERENCES users (user_id)
             )
         ''')
@@ -61,10 +89,12 @@ class Database:
             CREATE TABLE IF NOT EXISTS bans (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
+                chat_id INTEGER,
                 reason TEXT,
                 banned_by INTEGER,
                 banned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users (user_id),
+                FOREIGN KEY (chat_id) REFERENCES chats (chat_id),
                 FOREIGN KEY (banned_by) REFERENCES users (user_id)
             )
         ''')
@@ -74,20 +104,21 @@ class Database:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 reporter_id INTEGER,
                 reported_user_id INTEGER,
-                message_id INTEGER,
                 chat_id INTEGER,
+                message_id INTEGER,
                 reason TEXT,
                 status TEXT DEFAULT 'pending',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (reporter_id) REFERENCES users (user_id),
-                FOREIGN KEY (reported_user_id) REFERENCES users (user_id)
+                FOREIGN KEY (reported_user_id) REFERENCES users (user_id),
+                FOREIGN KEY (chat_id) REFERENCES chats (chat_id)
             )
         ''')
         
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_level ON users (user_id, level)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_message_history_user ON message_history (user_id, timestamp)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_sticker_history_user ON sticker_history (user_id, timestamp)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_reports_status ON reports (status)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_chat_users ON chat_users (chat_id, username)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_message_history_user_chat ON message_history (user_id, chat_id, timestamp)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_sticker_history_user_chat ON sticker_history (user_id, chat_id, timestamp)')
         
         self.conn.commit()
     
@@ -172,82 +203,138 @@ class Database:
         
         self.conn.commit()
     
-    def get_all_users(self) -> List[Dict[str, Any]]:
+    def add_chat_user(self, chat_id: int, user_id: int, username: str = None, first_name: str = None, last_name: str = None):
+        """Добавляет/обновляет пользователя в чате"""
         cursor = self.conn.cursor()
-        cursor.execute('SELECT user_id, level, username, first_name FROM users ORDER BY level DESC')
-        return [dict(row) for row in cursor.fetchall()]
+        
+        cursor.execute('SELECT * FROM chats WHERE chat_id = ?', (chat_id,))
+        chat = cursor.fetchone()
+        
+        if not chat:
+            cursor.execute('INSERT INTO chats (chat_id) VALUES (?)', (chat_id,))
+        
+        cursor.execute('SELECT * FROM chat_users WHERE chat_id = ? AND user_id = ?', (chat_id, user_id))
+        chat_user = cursor.fetchone()
+        
+        if chat_user:
+            cursor.execute('''
+                UPDATE chat_users 
+                SET username = ?, first_name = ?, last_name = ?, last_seen = CURRENT_TIMESTAMP
+                WHERE chat_id = ? AND user_id = ?
+            ''', (username, first_name, last_name, chat_id, user_id))
+        else:
+            cursor.execute('''
+                INSERT INTO chat_users (chat_id, user_id, username, first_name, last_name)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (chat_id, user_id, username, first_name, last_name))
+        
+        self.conn.commit()
     
-    def add_message_record(self, user_id: int, is_spam: bool):
+    def find_user_in_chat(self, chat_id: int, username: str):
+        """Находит пользователя в чате по username"""
+        cursor = self.conn.cursor()
+        
+        if username.startswith('@'):
+            username = username[1:]
+        
+        cursor.execute('''
+            SELECT cu.user_id, cu.username, cu.first_name, u.level 
+            FROM chat_users cu
+            LEFT JOIN users u ON cu.user_id = u.user_id
+            WHERE cu.chat_id = ? AND (LOWER(cu.username) = LOWER(?) OR cu.user_id = ?)
+        ''', (chat_id, username, username if username.isdigit() else -1))
+        
+        result = cursor.fetchone()
+        if result:
+            return dict(result)
+        return None
+    
+    def get_chat_users_by_level(self, chat_id: int):
+        """Получает пользователей чата сгруппированных по уровням"""
+        cursor = self.conn.cursor()
+        
+        cursor.execute('''
+            SELECT u.level, cu.username, cu.first_name, cu.user_id
+            FROM chat_users cu
+            LEFT JOIN users u ON cu.user_id = u.user_id
+            WHERE cu.chat_id = ?
+            ORDER BY u.level DESC, cu.username
+        ''', (chat_id,))
+        
+        results = cursor.fetchall()
+        return [dict(row) for row in results]
+    
+    def add_message_record(self, user_id: int, chat_id: int, is_spam: bool):
         cursor = self.conn.cursor()
         cursor.execute(
-            'INSERT INTO message_history (user_id, is_spam) VALUES (?, ?)',
-            (user_id, is_spam)
+            'INSERT INTO message_history (user_id, chat_id, is_spam) VALUES (?, ?, ?)',
+            (user_id, chat_id, is_spam)
         )
         self.conn.commit()
     
-    def get_recent_spam_messages(self, user_id: int, limit: int) -> List[bool]:
+    def get_recent_spam_messages(self, user_id: int, chat_id: int, limit: int) -> List[bool]:
         cursor = self.conn.cursor()
         cursor.execute('''
             SELECT is_spam FROM message_history 
-            WHERE user_id = ? 
+            WHERE user_id = ? AND chat_id = ?
             ORDER BY timestamp DESC 
             LIMIT ?
-        ''', (user_id, limit))
+        ''', (user_id, chat_id, limit))
         
         return [row['is_spam'] for row in cursor.fetchall()]
     
-    def add_sticker_record(self, user_id: int):
+    def add_sticker_record(self, user_id: int, chat_id: int):
         cursor = self.conn.cursor()
         cursor.execute(
-            'INSERT INTO sticker_history (user_id) VALUES (?)',
-            (user_id,)
+            'INSERT INTO sticker_history (user_id, chat_id) VALUES (?, ?)',
+            (user_id, chat_id)
         )
         self.conn.commit()
     
-    def get_recent_stickers(self, user_id: int, time_window: int) -> int:
+    def get_recent_stickers(self, user_id: int, chat_id: int, time_window: int) -> int:
         cursor = self.conn.cursor()
         cursor.execute('''
             SELECT COUNT(*) as count FROM sticker_history 
-            WHERE user_id = ? 
+            WHERE user_id = ? AND chat_id = ?
             AND timestamp > datetime('now', ? || ' seconds')
-        ''', (user_id, f'-{time_window}'))
+        ''', (user_id, chat_id, f'-{time_window}'))
         
         result = cursor.fetchone()
         return result['count'] if result else 0
     
-    def clear_user_history(self, user_id: int):
+    def clear_user_history(self, user_id: int, chat_id: int):
         cursor = self.conn.cursor()
-        cursor.execute('DELETE FROM message_history WHERE user_id = ?', (user_id,))
-        cursor.execute('DELETE FROM sticker_history WHERE user_id = ?', (user_id,))
+        cursor.execute('DELETE FROM message_history WHERE user_id = ? AND chat_id = ?', (user_id, chat_id))
+        cursor.execute('DELETE FROM sticker_history WHERE user_id = ? AND chat_id = ?', (user_id, chat_id))
         self.conn.commit()
     
-    def add_mute_record(self, user_id: int, reason: str, muted_by: int, mute_until: float):
+    def add_mute_record(self, user_id: int, chat_id: int, reason: str, muted_by: int, mute_until: float):
         cursor = self.conn.cursor()
         cursor.execute('''
-            INSERT INTO mutes (user_id, reason, muted_by, mute_until)
-            VALUES (?, ?, ?, datetime(?, 'unixepoch'))
-        ''', (user_id, reason, muted_by, mute_until))
+            INSERT INTO mutes (user_id, chat_id, reason, muted_by, mute_until)
+            VALUES (?, ?, ?, ?, datetime(?, 'unixepoch'))
+        ''', (user_id, chat_id, reason, muted_by, mute_until))
         self.conn.commit()
     
-    def add_ban_record(self, user_id: int, reason: str, banned_by: int):
+    def add_ban_record(self, user_id: int, chat_id: int, reason: str, banned_by: int):
         cursor = self.conn.cursor()
         cursor.execute('''
-            INSERT INTO bans (user_id, reason, banned_by)
-            VALUES (?, ?, ?)
-        ''', (user_id, reason, banned_by))
+            INSERT INTO bans (user_id, chat_id, reason, banned_by)
+            VALUES (?, ?, ?, ?)
+        ''', (user_id, chat_id, reason, banned_by))
         self.conn.commit()
     
-    def remove_ban_record(self, user_id: int):
+    def remove_ban_record(self, user_id: int, chat_id: int):
         cursor = self.conn.cursor()
-        cursor.execute('DELETE FROM bans WHERE user_id = ?', (user_id,))
+        cursor.execute('DELETE FROM bans WHERE user_id = ? AND chat_id = ?', (user_id, chat_id))
         self.conn.commit()
     
-    def add_report(self, reporter_id: int, reported_user_id: int, message_id: int, chat_id: int, reason: str = None):
+    def add_report(self, reporter_id: int, reported_user_id: int, chat_id: int, message_id: int, reason: str = None):
         cursor = self.conn.cursor()
         cursor.execute('''
-            INSERT INTO reports (reporter_id, reported_user_id, message_id, chat_id, reason)
+            INSERT INTO reports (reporter_id, reported_user_id, chat_id, message_id, reason)
             VALUES (?, ?, ?, ?, ?)
-        ''', (reporter_id, reported_user_id, message_id, chat_id, reason))
+        ''', (reporter_id, reported_user_id, chat_id, message_id, reason))
         self.conn.commit()
         return cursor.lastrowid
     
