@@ -40,6 +40,12 @@ def can_change_level(changer_id: int, target_id: int, new_level: int) -> tuple:
     changer_level = db.get_user_level(changer_id)
     target_level = db.get_user_level(target_id)
     
+    if changer_id == target_id:
+        if new_level >= 6:
+            return False, "Нельзя установить себе уровень старшего админа"
+        if new_level > changer_level:
+            return False, "Нельзя повышать себе уровень"
+    
     if changer_level <= target_level and changer_id != target_id:
         return False, "У вас недостаточно прав"
     
