@@ -236,7 +236,7 @@ class Database:
             VALUES (?, ?, ?)
         ''', (user_id, reason, banned_by))
         self.conn.commit()
-
+    
     def remove_ban_record(self, user_id: int):
         cursor = self.conn.cursor()
         cursor.execute('DELETE FROM bans WHERE user_id = ?', (user_id,))
