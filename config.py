@@ -4,7 +4,7 @@ from typing import List
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 if not BOT_TOKEN:
-    raise ValueError("❌ BOT_TOKEN не найден. Убедитесь, что хостинг установил переменную окружения.")
+    raise ValueError("BOT_TOKEN not found")
 
 SENIOR_ADMIN_IDS: List[int] = [5874147280]
 
