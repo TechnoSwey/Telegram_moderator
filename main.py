@@ -222,31 +222,43 @@ async def unmute(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Укажите @username пользователя")
         return
     
-    username = context.args[0].lstrip('@')
+    identifier = context.args[0].lstrip('@')
     
     target_id = None
-    target_username = None
+    target_name = None
     
-    if username.isdigit():
-        target_id = int(username)
-        target_username = f"ID: {target_id}"
+    # Если это ID (только цифры)
+    if identifier.isdigit():
+        target_id = int(identifier)
+        target_name = f"ID: {target_id}"
     else:
+        # Если это юзернейм, пробуем найти через get_chat
         try:
+            # Сначала пробуем обычный поиск
             async for member in context.bot.get_chat_members(chat_id):
-                if member.user.username and member.user.username.lower() == username.lower():
+                if member.user.username and member.user.username.lower() == identifier.lower():
                     target_id = member.user.id
-                    target_username = f"@{member.user.username}"
+                    target_name = f"@{member.user.username}"
                     break
+            
+            # Если не нашли, пробуем поиск по упоминаниям в истории сообщений
+            if not target_id:
+                # Получаем последние сообщения
+                try:
+                    messages = await context.bot.get_chat_history(chat_id, limit=100)
+                    async for msg in messages:
+                        if msg.from_user and msg.from_user.username and msg.from_user.username.lower() == identifier.lower():
+                            target_id = msg.from_user.id
+                            target_name = f"@{msg.from_user.username}"
+                            break
+                except:
+                    pass
+                    
         except Exception as e:
-            if username.isdigit():
-                target_id = int(username)
-                target_username = f"ID: {target_id}"
-            else:
-                await update.message.reply_text("❌ Пользователь не найден в чате. Используйте ID пользователя.")
-                return
+            pass
     
     if not target_id:
-        await update.message.reply_text("❌ Пользователь не найден")
+        await update.message.reply_text("❌ Пользователь не найден. Используйте ID пользователя.")
         return
     
     if user_id != target_id and db.get_user_level(user_id) <= db.get_user_level(target_id):
@@ -260,7 +272,7 @@ async def unmute(update: Update, context: ContextTypes.DEFAULT_TYPE):
             permissions=UNMUTE_PERMISSIONS
         )
         
-        await update.message.reply_text(f"✅ Пользователь {target_username} размьючен!")
+        await update.message.reply_text(f"✅ Пользователь {target_name} размьючен!")
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка при размуте: {str(e)}")
 
@@ -276,7 +288,7 @@ async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Формат: /mute @username [время в секундах]\nПример: /mute @username 3600")
         return
     
-    username = context.args[0].lstrip('@')
+    identifier = context.args[0].lstrip('@')
     
     mute_time = DEFAULT_MUTE_TIME
     if len(context.args) > 1:
@@ -287,28 +299,35 @@ async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
     
     target_id = None
-    target_username = None
+    target_name = None
     
-    if username.isdigit():
-        target_id = int(username)
-        target_username = f"ID: {target_id}"
+    if identifier.isdigit():
+        target_id = int(identifier)
+        target_name = f"ID: {target_id}"
     else:
         try:
             async for member in context.bot.get_chat_members(chat_id):
-                if member.user.username and member.user.username.lower() == username.lower():
+                if member.user.username and member.user.username.lower() == identifier.lower():
                     target_id = member.user.id
-                    target_username = f"@{member.user.username}"
+                    target_name = f"@{member.user.username}"
                     break
+            
+            if not target_id:
+                try:
+                    messages = await context.bot.get_chat_history(chat_id, limit=100)
+                    async for msg in messages:
+                        if msg.from_user and msg.from_user.username and msg.from_user.username.lower() == identifier.lower():
+                            target_id = msg.from_user.id
+                            target_name = f"@{msg.from_user.username}"
+                            break
+                except:
+                    pass
+                    
         except Exception as e:
-            if username.isdigit():
-                target_id = int(username)
-                target_username = f"ID: {target_id}"
-            else:
-                await update.message.reply_text("❌ Пользователь не найден в чате. Используйте ID пользователя.")
-                return
+            pass
     
     if not target_id:
-        await update.message.reply_text("❌ Пользователь не найден")
+        await update.message.reply_text("❌ Пользователь не найден. Используйте ID пользователя.")
         return
     
     if not can_mute_user(user_id, target_id):
@@ -337,9 +356,9 @@ async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             time_str += f"{minutes} мин"
         
         if time_str:
-            await update.message.reply_text(f"✅ Пользователь {target_username} замьючен на {time_str.strip()}!")
+            await update.message.reply_text(f"✅ Пользователь {target_name} замьючен на {time_str.strip()}!")
         else:
-            await update.message.reply_text(f"✅ Пользователь {target_username} замьючен!")
+            await update.message.reply_text(f"✅ Пользователь {target_name} замьючен!")
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка при муте: {str(e)}")
 
@@ -355,33 +374,40 @@ async def ban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Формат: /ban @username [причина]\nПример: /ban @username спам")
         return
     
-    username = context.args[0].lstrip('@')
+    identifier = context.args[0].lstrip('@')
     
     reason = " ".join(context.args[1:]) if len(context.args) > 1 else "Без указания причины"
     
     target_id = None
-    target_username = None
+    target_name = None
     
-    if username.isdigit():
-        target_id = int(username)
-        target_username = f"ID: {target_id}"
+    if identifier.isdigit():
+        target_id = int(identifier)
+        target_name = f"ID: {target_id}"
     else:
         try:
             async for member in context.bot.get_chat_members(chat_id):
-                if member.user.username and member.user.username.lower() == username.lower():
+                if member.user.username and member.user.username.lower() == identifier.lower():
                     target_id = member.user.id
-                    target_username = f"@{member.user.username}"
+                    target_name = f"@{member.user.username}"
                     break
+            
+            if not target_id:
+                try:
+                    messages = await context.bot.get_chat_history(chat_id, limit=100)
+                    async for msg in messages:
+                        if msg.from_user and msg.from_user.username and msg.from_user.username.lower() == identifier.lower():
+                            target_id = msg.from_user.id
+                            target_name = f"@{msg.from_user.username}"
+                            break
+                except:
+                    pass
+                    
         except Exception as e:
-            if username.isdigit():
-                target_id = int(username)
-                target_username = f"ID: {target_id}"
-            else:
-                await update.message.reply_text("❌ Пользователь не найден в чате. Используйте ID пользователя.")
-                return
+            pass
     
     if not target_id:
-        await update.message.reply_text("❌ Пользователь не найден")
+        await update.message.reply_text("❌ Пользователь не найден. Используйте ID пользователя.")
         return
     
     if not can_ban_user(user_id, target_id):
@@ -396,7 +422,7 @@ async def ban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         db.add_ban_record(target_id, reason, user_id)
         
-        await update.message.reply_text(f"✅ Пользователь {target_username} забанен!\nПричина: {reason}")
+        await update.message.reply_text(f"✅ Пользователь {target_name} забанен!\nПричина: {reason}")
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка при бане: {str(e)}")
 
@@ -415,20 +441,26 @@ async def unban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     identifier = context.args[0]
     
     target_id = None
+    target_name = None
     
     if identifier.startswith('@'):
         username = identifier.lstrip('@')
-        try:
-            async for member in context.bot.get_chat_members(chat_id):
-                if member.user.username and member.user.username.lower() == username.lower():
-                    target_id = member.user.id
-                    break
-        except:
-            await update.message.reply_text("❌ Пользователь не найден в чате")
+        
+        # Для разбана можно просто попробовать найти в базе данных
+        all_users = db.get_all_users()
+        for user_data in all_users:
+            if user_data['username'] and user_data['username'].lower() == username.lower():
+                target_id = user_data['user_id']
+                target_name = f"@{user_data['username']}"
+                break
+        
+        if not target_id:
+            await update.message.reply_text("❌ Пользователь не найден в базе данных. Используйте ID пользователя.")
             return
     else:
         try:
             target_id = int(identifier)
+            target_name = f"ID: {target_id}"
         except ValueError:
             await update.message.reply_text("❌ Неверный формат. Используйте @username или user_id")
             return
@@ -445,7 +477,7 @@ async def unban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         db.remove_ban_record(target_id)
         
-        await update.message.reply_text(f"✅ Пользователь ID: {target_id} разбанен!")
+        await update.message.reply_text(f"✅ Пользователь {target_name} разбанен!")
     except Exception as e:
         error_msg = str(e)
         if "user not found" in error_msg.lower() or "chat not found" in error_msg.lower():
